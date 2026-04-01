@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -267,7 +267,6 @@ body{display:flex;flex-direction:column;align-items:center;overflow-x:hidden;ove
   .rope-panel-meta{font-size:10px;min-height:12px;}
   .answer-panel{padding:8px 10px;gap:6px;}
   .question-card-room{padding:8px 10px;border-radius:12px;}
-  .qtext{font-size:16px;}
   .answer-grid-room{grid-template-columns:64px 1fr 132px;gap:6px;}
   .myscore{padding:4px 6px;}
   .myscore-v{font-size:16px;}
@@ -671,6 +670,139 @@ const cv=document.getElementById('gc'),ctx=cv.getContext('2d');
 let rope=0.5,targetRope=0.5,raf=null;
 let fall1=false,fall2=false,fy1=0,fy2=0,fv1=0,fv2=0;
 let pull1=0,pull2=0,shake=0,finalOverlayTimer=null;
+let ropeWhip=0;
+let finishAnim={
+  active:false,
+  loser:0, // 1 or 2
+  winner:0, // 1 or 2
+  startedAt:0,
+  collapseStartedAt:0,
+  dragEndAt:0,
+  phase:'idle',
+  dragProgress:0,
+  loserAdvance:0,
+  nextDropAt:0,
+  dropped:0,
+  anticipationEndAt:0,
+  slotY:[0,0,0,0,0,0],
+  slotV:[0,0,0,0,0,0],
+  slotRot:[0,0,0,0,0,0],
+  slotX:[0,0,0,0,0,0],
+  slotFallT:[0,0,0,0,0,0],
+  sparks:[],
+  trails:[]
+};
+
+function resetFinishAnim(){
+  finishAnim={
+    active:false,loser:0,winner:0,startedAt:0,collapseStartedAt:0,dragEndAt:0,
+    phase:'idle',dragProgress:0,loserAdvance:0,nextDropAt:0,dropped:0,anticipationEndAt:0,
+    slotY:[0,0,0,0,0,0],slotV:[0,0,0,0,0,0],slotRot:[0,0,0,0,0,0],slotX:[0,0,0,0,0,0],slotFallT:[0,0,0,0,0,0],sparks:[],trails:[]
+  };
+}
+function startFinishAnim(winnerTeam){
+  resetFinishAnim();
+  const now=Date.now();
+  finishAnim.active=true;
+  finishAnim.winner=winnerTeam;
+  finishAnim.loser=winnerTeam===1?2:1;
+  finishAnim.startedAt=now;
+  finishAnim.phase='anticipation';
+  finishAnim.anticipationEndAt=now+320;
+  finishAnim.dragEndAt=now+1520;
+  finishAnim.nextDropAt=finishAnim.dragEndAt+180;
+  finishAnim.dropped=0;
+  targetRope=winnerTeam===1?.95:.05;
+}
+function updateFinishAnim(){
+  if(!finishAnim.active)return;
+  const now=Date.now();
+  const elapsed=Math.max(0,now-finishAnim.startedAt);
+  if(finishAnim.phase==='anticipation'){
+    const t=Math.min(1,Math.max(0,(now-finishAnim.startedAt)/Math.max(1,finishAnim.anticipationEndAt-finishAnim.startedAt)));
+    finishAnim.dragProgress=t*0.12;
+    if(now>=finishAnim.anticipationEndAt){
+      finishAnim.phase='drag';
+    }
+  }
+  if(finishAnim.phase==='drag'){
+    const t=Math.min(1,Math.max(0,(now-finishAnim.anticipationEndAt)/Math.max(1,finishAnim.dragEndAt-finishAnim.anticipationEndAt)));
+    const eased=1-Math.pow(1-t,3); // ease-out pull-in to pit edge
+    finishAnim.dragProgress=0.12+eased*0.88;
+    if(now>=finishAnim.dragEndAt){
+      finishAnim.phase='collapse';
+      finishAnim.collapseStartedAt=now;
+      finishAnim.nextDropAt=now+140;
+    }
+  }
+  if(finishAnim.phase==='collapse'&&now>=finishAnim.nextDropAt && finishAnim.dropped<6){
+    finishAnim.dropped++;
+    // cinematic cadence: first drops are tense, then chain accelerates
+    const seq=[260,230,200,170,145,130];
+    finishAnim.nextDropAt=now+(seq[Math.min(finishAnim.dropped,seq.length-1)]||140);
+    if(finishAnim.dropped<=2){
+      shake=Math.max(shake,1.25);
+      ropeWhip=Math.max(ropeWhip,1.15);
+    }
+  }
+  const m=getSceneMetrics();
+  const pitCenter=(m.pitLeft+m.pitRight)*0.5;
+  for(let i=0;i<6;i++){
+    const shouldFall=i<finishAnim.dropped;
+    const pullIntoPit=(finishAnim.phase==='drag'||finishAnim.phase==='collapse')
+      ? finishAnim.dragProgress
+      : 0;
+    if(pullIntoPit>0){
+      const baseToPit=22 + i*2.5; // near pit moves first visually
+      const sign=finishAnim.loser===1?1:-1;
+      finishAnim.slotX[i]=sign*baseToPit*pullIntoPit;
+    }
+    if(!shouldFall)continue;
+    finishAnim.slotFallT[i]=Math.min(1,finishAnim.slotFallT[i]+0.03+Math.min(.02,i*.003));
+    const t=finishAnim.slotFallT[i];
+    finishAnim.slotV[i]+=0.45+t*0.22;
+    finishAnim.slotY[i]+=finishAnim.slotV[i];
+    finishAnim.slotRot[i]=Math.min(1.45,finishAnim.slotRot[i]+0.052+t*0.015);
+    if(Math.random()<0.35){
+      finishAnim.sparks.push({
+        xJ:(Math.random()-.5)*26,
+        y:0,
+        v:1.4+Math.random()*1.6,
+        a:.85+Math.random()*.15
+      });
+    }
+    if(Math.random()<0.45){
+      const lane=(finishAnim.loser===1?1:-1)*(10+i*2);
+      finishAnim.trails.push({
+        x:pitCenter+lane+(Math.random()-.5)*10,
+        y:m.floorTop+18+Math.min(m.h*.58,finishAnim.slotY[i]*0.58),
+        vx:(Math.random()-.5)*.35,
+        vy:.7+Math.random()*1.2,
+        a:.55+Math.random()*.3,
+        s:1+Math.random()*1.8
+      });
+    }
+  }
+  if(finishAnim.sparks.length){
+    finishAnim.sparks=finishAnim.sparks
+      .map(p=>({xJ:p.xJ,y:p.y+p.v,v:p.v+.04,a:p.a-.02}))
+      .filter(p=>p.a>0);
+  }
+  if(finishAnim.trails.length){
+    finishAnim.trails=finishAnim.trails
+      .map(p=>({x:p.x+p.vx,y:p.y+p.vy,vx:p.vx*.99,vy:p.vy+.03,a:p.a-.017,s:p.s}))
+      .filter(p=>p.a>0);
+  }
+  const basePull=Math.min(0.92,0.42+elapsed*0.00024);
+  const wave=(Math.sin(now*0.012)+1)*(finishAnim.phase==='anticipation'?0.03:0.08);
+  if(finishAnim.winner===1){
+    pull1=basePull+wave;
+    pull2=0;
+  }else if(finishAnim.winner===2){
+    pull2=basePull+wave;
+    pull1=0;
+  }
+}
 
 function resize(){cv.width=cv.offsetWidth;cv.height=cv.offsetHeight;}
 function isCompactLandscape(){
@@ -775,25 +907,80 @@ function drawPlatform(){
   }
 }
 
+function drawFinishEffects(){
+  if(!finishAnim.active)return;
+  const {w,h,pitLeft,pitRight,floorTop}=getSceneMetrics();
+  const glow=finishAnim.phase==='collapse'?0.22:0.12;
+  const grad=ctx.createRadialGradient((pitLeft+pitRight)/2,floorTop+18,8,(pitLeft+pitRight)/2,floorTop+18,Math.max(36,(pitRight-pitLeft)*1.35));
+  grad.addColorStop(0,`rgba(255,70,120,${glow})`);
+  grad.addColorStop(1,'rgba(255,70,120,0)');
+  ctx.fillStyle=grad;
+  ctx.fillRect(0,0,w,h);
+
+  for(const p of finishAnim.sparks){
+    const cx=(pitLeft+pitRight)/2 + p.xJ;
+    const cy=floorTop+14+p.y;
+    ctx.fillStyle=`rgba(255,170,120,${Math.max(0,p.a)})`;
+    ctx.fillRect(Math.round(cx),Math.round(cy),2,2);
+  }
+  for(const p of finishAnim.trails){
+    ctx.fillStyle=`rgba(255,130,90,${Math.max(0,p.a)})`;
+    ctx.fillRect(Math.round(p.x),Math.round(p.y),Math.max(1,Math.round(p.s)),Math.max(1,Math.round(p.s)));
+  }
+}
+
 function ropeShift(pos){
   return Math.max(-1,Math.min(1,((pos??0.5)-0.5)/0.47));
 }
 
-function getTeamSlots(teamNum,pull,falling,fy){
-  const {pitLeft,pitRight,floorTop,leftEdge,rightEdge}=getSceneMetrics();
+function getTeamSlots(teamNum,pull,falling,fy,pos=rope){
+  const {pitLeft,pitRight,floorTop,leftEdge,rightEdge,h}=getSceneMetrics();
   const compact=isCompactLandscape() || isAndroidDevice();
   const unit=Math.max(compact?2:3,Math.min(compact?4:6,Math.floor(cv.height/(compact?62:46))));
   const slots=6;
   const gap=unit*(compact?5.5:6.2);
   const leftCenter=(leftEdge+pitLeft)*0.5;
   const rightCenter=(pitRight+rightEdge)*0.5;
-  const centerX=teamNum===1?leftCenter:rightCenter;
+  const adv=Math.max(-1,Math.min(1,((pos??0.5)-0.5)/0.47)); // >0 means p1 has advantage
+  const loseDrag=Math.max(compact?18:24,Math.min(compact?48:62,cv.width*(compact?.06:.075)));
+  const winRelief=loseDrag*0.42;
+  const p1Shift = adv>=0 ? (-adv*winRelief) : (-adv*loseDrag);
+  const p2Shift = adv>=0 ? (-adv*loseDrag) : (-adv*winRelief);
+  const centerX=(teamNum===1?leftCenter:rightCenter) + (teamNum===1?p1Shift:p2Shift);
   const startX=centerX-((slots-1)*gap*0.5);
   const arr=[];
   for(let i=0;i<slots;i++){
-    const x=startX+gap*i;
-    const y=floorTop+(falling?fy:0)+Math.sin(Date.now()*.0025+i*.55)*(falling?0:unit*.12);
-    arr.push({x,y,facing:teamNum===1?1:-1,pull:i===slots-1?pull:pull*(0.55+i*.06),num:i+1,unit,front:teamNum===1?i===slots-1:i===0});
+    let dropX=0;
+    let dropMask=0;
+    if(finishAnim.active && finishAnim.loser===teamNum){
+      // Drop order from the fighter nearest to the pit, then deeper into line.
+      // Team 1 nearest pit index is 5, team 2 nearest pit index is 0.
+      const mapped=(teamNum===1)?(slots-1-i):i;
+      dropX=finishAnim.slotX[mapped]||0;
+      dropMask=finishAnim.slotFallT[mapped]||0;
+    }
+    const baseX=startX+gap*i+dropX;
+    const pitCenter=(pitLeft+pitRight)*0.5;
+    const sinkSign=teamNum===1?1:-1;
+    const laneOffset=sinkSign*(8+i*1.5);
+    const targetPitX=pitCenter+laneOffset;
+    const pitDiveX=(targetPitX-baseX)*dropMask;
+    const x=baseX+pitDiveX;
+    let dropY=0,dropRot=0,fallLevel=0;
+    if(finishAnim.active && finishAnim.loser===teamNum){
+      const mapped=(teamNum===1)?(slots-1-i):i;
+      const isDropped=mapped<finishAnim.dropped;
+      if(isDropped){
+        const t=finishAnim.slotFallT[mapped]||0;
+        const deep=Math.max(120,h*.68);
+        const pitCurve=(t*t)*(deep+(mapped*8));
+        dropY=pitCurve+finishAnim.slotY[mapped];
+        dropRot=finishAnim.slotRot[mapped];
+      }
+      fallLevel=Math.min(1,dropRot/1.05);
+    }
+    const y=floorTop+(falling?fy:0)+dropY+Math.sin(Date.now()*.0025+i*.55)*((falling||fallLevel>0)?0:unit*.12);
+    arr.push({x,y,facing:teamNum===1?1:-1,pull:i===slots-1?pull:pull*(0.55+i*.06),num:i+1,unit,front:teamNum===1?i===slots-1:i===0,fallLevel,dropRot});
   }
   return arr;
 }
@@ -810,13 +997,14 @@ function getHandAnchor(slot){
 function drawRope(pos){
   const {w}=getSceneMetrics();
   const sx=shake>0?(Math.random()-.5)*shake*4:0;
-  const leftSlots=getTeamSlots(1,pull1,fall1,fy1);
-  const rightSlots=getTeamSlots(2,pull2,fall2,fy2);
+  const leftSlots=getTeamSlots(1,pull1,fall1,fy1,pos);
+  const rightSlots=getTeamSlots(2,pull2,fall2,fy2,pos);
   const leftAnchors=leftSlots.map(getHandAnchor).sort((a,b)=>a.x-b.x);
   const rightAnchors=rightSlots.map(getHandAnchor).sort((a,b)=>a.x-b.x);
   const tug=ropeShift(pos);
-  const knotX=Math.round(w*.5+tug*Math.min(w*.13,84))+sx;
-  const knotY=Math.round((leftAnchors[leftAnchors.length-1].y+rightAnchors[0].y)*0.5 + tug*2);
+  const whip=ropeWhip>0?Math.sin(Date.now()*.055)*ropeWhip*9:0;
+  const knotX=Math.round(w*.5+tug*Math.min(w*.13,84)+whip*.22)+sx;
+  const knotY=Math.round((leftAnchors[leftAnchors.length-1].y+rightAnchors[0].y)*0.5 + tug*2 + whip);
   const pts=[...leftAnchors,{x:knotX,y:knotY},...rightAnchors];
 
   ctx.save();
@@ -860,15 +1048,16 @@ function drawRope(pos){
   }
 }
 
-function drawTeam(teamNum,color,pull,falling,fy){
-  const slots=getTeamSlots(teamNum,pull,falling,fy);
-  slots.forEach(slot=>drawSP(slot,color,falling));
+function drawTeam(teamNum,color,pull,falling,fy,pos){
+  const slots=getTeamSlots(teamNum,pull,falling,fy,pos);
+  slots.forEach(slot=>drawSP(slot,color,Math.max(falling?1:0,slot.fallLevel||0),slot.dropRot||0));
 }
 
-function drawSP(slot,color,fallen){
+function drawSP(slot,color,fallen,dropRot=0){
   const {x,y,facing,pull,num,unit}=slot;
   const dir=facing;
-  const lean=-pull*.11 + (fallen?.9:0);
+  const rotDir=dir===1?1:-1;
+  const lean=-pull*.11 + (fallen?.9:0) + dropRot*rotDir;
   const skin='#d6a07a';
   const hair='#18161b';
   const outline='#141219';
@@ -883,6 +1072,7 @@ function drawSP(slot,color,fallen){
   ctx.translate(x,y);
   if(dir===-1)ctx.scale(-1,1);
   ctx.rotate(lean);
+  ctx.globalAlpha=1-Math.min(.55,fallen*.45);
   ctx.imageSmoothingEnabled=false;
 
   if(!fallen)pxRect(-unit*3.1,unit*.6,unit*6.2,unit*.9,'rgba(0,0,0,.22)');
@@ -952,13 +1142,16 @@ function draw(){
   ctx.clearRect(0,0,cv.width,cv.height);
   rope+=(targetRope-rope)*.055;
   if(shake>0)shake=Math.max(0,shake-.04);
+  if(ropeWhip>0)ropeWhip=Math.max(0,ropeWhip-.03);
+  updateFinishAnim();
   drawBg();
   drawPlatform();
+  drawFinishEffects();
   drawRope(rope);
   if(fall1){fv1+=1.5;fy1+=fv1;}
   if(fall2){fv2+=1.5;fy2+=fv2;}
-  drawTeam(1,tc1,pull1,fall1,fy1);
-  drawTeam(2,tc2,pull2,fall2,fy2);
+  drawTeam(1,tc1,pull1,fall1,fy1,rope);
+  drawTeam(2,tc2,pull2,fall2,fy2,rope);
   raf=requestAnimationFrame(draw);
 }
 
@@ -1034,6 +1227,7 @@ async function createRoom(){
       rope:.5,gameTimeLeft:GAME_DUR,
       q:{text:q.text},
       questions:{0:q.text},
+      questionsAnswers:{0:q.answer},
       progress:{p1:0,p2:0},
       questionFirst:{},
       firstAns:'',
@@ -1121,9 +1315,19 @@ function enterGame(d){
   setQuestionText(getVisibleQuestion(d));
   clearTimeout(finalOverlayTimer);
   gameData=d;
+  // populate local answerKey from DB-stored answers (if present)
+  answerKey = {};
+  if(d?.questionsAnswers){
+    for(const k in d.questionsAnswers){
+      const idx = k;
+      const text = d.questions?.[idx] ?? d.questions?.[String(idx)] ?? (d.q && idx==0 ? d.q.text : undefined);
+      if(text!==undefined) answerKey[text]=d.questionsAnswers[k];
+    }
+  }
   rope=.5;targetRope=.5;gTimeLeft=GAME_DUR;
   gameActive=true;answered=false;waitingVal=false;lastAt=0;
   fall1=false;fall2=false;fy1=0;fy2=0;fv1=0;fv2=0;pull1=0;pull2=0;shake=0;
+  resetFinishAnim();
   resize();cancelAnimationFrame(raf);draw();
   setAnsEnabled(true);updTimer();
   document.getElementById('overlay').classList.remove('show');
@@ -1177,7 +1381,13 @@ function getVisibleQuestion(d){
   return getQuestionTextByIndex(d,getRoleQuestionIndex(myRole,d));
 }
 function getExpectedAnswerForRole(role,d){
-  const text=getQuestionTextByIndex(d,getRoleQuestionIndex(role,d));
+  const idx=getRoleQuestionIndex(role,d);
+  // Prefer answers stored in DB
+  if(d?.questionsAnswers && (d.questionsAnswers[idx]!==undefined || d.questionsAnswers[String(idx)]!==undefined)){
+    return d.questionsAnswers[idx]??d.questionsAnswers[String(idx)];
+  }
+  // Fallback to local map (for older rooms / transient state)
+  const text=getQuestionTextByIndex(d,idx);
   return answerKey[text];
 }
 function syncState(d){
@@ -1289,6 +1499,7 @@ async function handleAns(role,ok,d){
     const nextQ=makeQ(curCat,curDiff);
     answerKey[nextQ.text]=nextQ.answer;
     updates[`questions/${nextIdx}`]=nextQ.text;
+    updates[`questionsAnswers/${nextIdx}`]=nextQ.answer;
   }
   if(newRope>=.97||newRope<=.03){
     updates.status='finished';
@@ -1346,15 +1557,14 @@ function showFinal(d){
   const rematch=d.rematch||{p1:false,p2:false};
 
   fall1=false;fall2=false;fy1=0;fy2=0;fv1=0;fv2=0;
+  resetFinishAnim();
   if(winner==='p1'){
-    targetRope=.9;
-    fall2=true;
+    startFinishAnim(1);
     ico.textContent=myRole==='p1'?'🏆':'💀';
     ttl.textContent=myRole==='p1'?'ТЫ ПОБЕДИЛ!':'ТЫ ПРОИГРАЛ';
     sub.textContent=reason==='edge' ? ((d.p2?.name||'Команда 2')+' не удержал канат.') : (d.p1.name+' побеждает!');
   }else if(winner==='p2'){
-    targetRope=.1;
-    fall1=true;
+    startFinishAnim(2);
     ico.textContent=myRole==='p2'?'🏆':'💀';
     ttl.textContent=myRole==='p2'?'ТЫ ПОБЕДИЛ!':'ТЫ ПРОИГРАЛ';
     sub.textContent=reason==='edge' ? (d.p1.name+' не удержал канат.') : ((d.p2?.name||'Команда 2')+' побеждает!');
@@ -1373,9 +1583,12 @@ function showFinal(d){
   document.getElementById('btnAgain').textContent=bothReady?'ЗАПУСК...':(meReady?'ЖДЁМ СОПЕРНИКА':'ПРОДОЛЖИТЬ');
   document.getElementById('btnAgain').disabled=!!meReady;
   document.getElementById('overlay').classList.remove('show');
+  let overlayDelay=2400;
+  if(reason==='edge')overlayDelay=3500;
+  if(finishAnim.active && finishAnim.phase!=='idle')overlayDelay=Math.max(overlayDelay,3800);
   finalOverlayTimer=setTimeout(()=>{
     document.getElementById('overlay').classList.add('show');
-  },1500);
+  },overlayDelay);
 }
 
 async function startRematchMatch(){
@@ -1384,13 +1597,15 @@ async function startRematchMatch(){
   await update(roomRef,{
     'p1/score':0,'p2/score':0,status:'playing',rope:.5,
     gameTimeLeft:GAME_DUR,q:{text:q.text},questions:{0:q.text},progress:{p1:0,p2:0},questionFirst:{},
-    firstAns:'',nextQAt:0,winner:'',finishReason:'',sub:{role:'',val:null,at:0},fb:{role:'',ok:null,pts:0,at:0},rematch:{p1:false,p2:false}
+    firstAns:'',nextQAt:0,winner:'',finishReason:'',sub:{role:'',val:null,at:0},fb:{role:'',ok:null,pts:0,at:0},rematch:{p1:false,p2:false},
+    questionsAnswers:{0:q.answer}
   });
   document.getElementById('overlay').classList.remove('show');
   gameData=null;
   rope=.5;targetRope=.5;gTimeLeft=GAME_DUR;
   gameActive=true;answered=false;waitingVal=false;lastAt=0;
   fall1=false;fall2=false;fy1=0;fy2=0;fv1=0;fv2=0;pull1=0;pull2=0;shake=0;
+  resetFinishAnim();
   document.getElementById('t1pts').textContent='0';
   document.getElementById('t2pts').textContent='0';
   document.getElementById('mysc').textContent='0';
@@ -1433,11 +1648,13 @@ async function backToLobby(){
   document.getElementById('hdrTimer').className='hdr-timer';
   document.getElementById('qrWrap').innerHTML='';
   rope=.5;targetRope=.5;myRole=null;roomCode=null;roomRef=null;isHost=false;gameData=null;answerKey={};
+  resetFinishAnim();
   showScreen('sLobby');
 };
 
 function showAbort(msg){
   clearInterval(gtimer);clearTimeout(nextQuestionTimer);gameActive=false;cleanSub();
+  resetFinishAnim();
   setAnsEnabled(false);
   document.getElementById('ov-ico').textContent='🚪';
   document.getElementById('ov-title').textContent='ИГРА ПРЕРВАНА';
@@ -1472,6 +1689,7 @@ if(urlRoom&&/^\d{4}$/.test(urlRoom))document.getElementById('codeInp').value=url
 </script>
 </body>
 </html>
+
 
 
 
